@@ -15,6 +15,8 @@ use rumqttc::{MqttOptions, AsyncClient, QoS};
 #[derive(Parser)]
 #[clap(version = "1.0", author = "Teemu Erkkola <teemu.erkkola@iki.fi>")]
 struct Opts {
+    #[clap(short, long, default_value = "ruuvitag-mqtt")]
+    name: String,
     #[clap(short, long, default_value = "localhost")]
     host: String,
     #[clap(short, long, default_value = "1883")]
@@ -48,7 +50,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Connect to MQTT server
     let (mut client, mut mqtt_events) = {
-        let mut mqttoptions = MqttOptions::new("ruuuvitag-mqtt", &opts.host, opts.port);
+        let mut mqttoptions = MqttOptions::new(&opts.name, &opts.host, opts.port);
         mqttoptions.set_keep_alive(5);
         AsyncClient::new(mqttoptions, 10)
     };
@@ -64,10 +66,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Spawn a task for MQTT eventloop
     task::spawn(async move {
+        const MAX_WAIT_DURATION: u64 = 60;
+        let mut wait_duration = 1;
         loop {
             match mqtt_events.poll().await {
-                Ok(_) => trace!("MQTT event loop poll success"),
-                Err(e) => error!("MQTT event loop poll failed: {}", e)
+                Ok(_) => {
+                    trace!("MQTT event loop poll success");
+                    wait_duration = 1;
+                },
+                Err(e) => {
+                    error!("MQTT event loop poll failed: {}, waiting {}s before retry", e, wait_duration);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(wait_duration)).await;
+                    wait_duration = (wait_duration + 1).min(MAX_WAIT_DURATION);
+                }
             }
         }
     });
